@@ -23,6 +23,13 @@ namespace wf
 {
 namespace vswitch
 {
+
+class vswitch_handler_t {
+  public:
+    virtual bool handle_dir(wf::point_t delta, wayfire_toplevel_view view, bool window_only, bool wraparound) = 0;
+    virtual bool handle_last(wayfire_toplevel_view view, bool window_only) = 0;
+};
+
 /**
  * A simple class to register the vswitch bindings and get a custom callback called.
  */
@@ -69,10 +76,10 @@ class control_bindings_t
      *
      * @param callback The callback to execute on each binding
      */
-    void setup(binding_callback_t callback)
+    void setup(vswitch_handler_t *handler)
     {
         tear_down();
-        this->user_cb = callback;
+        this->handler = handler;
 
         // Setup a new binding on the output.
         //
@@ -87,7 +94,7 @@ class control_bindings_t
         activator_cbs.push_back(std::make_unique<activator_callback>()); \
         *activator_cbs.back() = [=] (const wf::activator_data_t&) \
         {\
-            return handle_dir({dx, dy}, view, only, callback); \
+            return handler->handle_dir({dx, dy}, view, only, wraparound); \
         };\
         output->add_activator(binding_##name, activator_cbs.back().get());
 
@@ -114,7 +121,7 @@ class control_bindings_t
         activator_cbs.push_back(std::make_unique<activator_callback>()); \
         *activator_cbs.back() = [=] (const wf::activator_data_t&) \
         {\
-            return handle_dir(-get_last_dir(), view, only, callback); \
+            return handler->handle_last(view, only); \
         };\
         output->add_activator(binding_##name, activator_cbs.back().get());
 
@@ -154,7 +161,7 @@ class control_bindings_t
                 wf::point_t current = output->wset()->get_current_workspace();
 
                 auto view = (grab_view ? get_target_view() : nullptr);
-                return handle_dir(target - current, view, only_view, callback);
+                return handler->handle_dir(target - current, view, only_view, wraparound);
             };
 
             output->add_activator(wf::create_option(binding),
@@ -191,10 +198,8 @@ class control_bindings_t
     }
 
   protected:
-    binding_callback_t user_cb;
+    vswitch_handler_t *handler;
     std::vector<std::unique_ptr<wf::activator_callback>> activator_cbs;
-
-    wf::point_t last_dir = {0, 0};
 
     wf::wl_idle_call idle_reload;
     wf::config::option_base_t::updated_callback_t on_cfg_reload = [=] ()
@@ -204,9 +209,9 @@ class control_bindings_t
         {
             // Reload only if the plugin has already setup bindings once,
             // otherwise, we do not have any callbacks to register.
-            if (user_cb)
+            if (handler)
             {
-                setup(user_cb);
+                setup(handler);
             }
         });
     };
@@ -232,54 +237,6 @@ class control_bindings_t
         }
 
         return view;
-    }
-
-    virtual wf::point_t get_last_dir()
-    {
-        return this->last_dir;
-    }
-
-    /**
-     * Handle binding in the given direction. The next workspace will be
-     * determined by the current workspace, target direction and wraparound
-     * mode.
-     */
-    virtual bool handle_dir(wf::point_t dir, wayfire_toplevel_view view, bool window_only,
-        binding_callback_t callback)
-    {
-        if (!view && window_only)
-        {
-            // Maybe there is no view, in any case, no need to do anything
-            return false;
-        }
-
-        auto ws = output->wset()->get_current_workspace();
-        auto target_ws = ws + dir;
-        if (!output->wset()->is_workspace_valid(target_ws))
-        {
-            if (wraparound)
-            {
-                auto grid_size = output->wset()->get_workspace_grid_size();
-                target_ws.x = (target_ws.x + grid_size.width) % grid_size.width;
-                target_ws.y = (target_ws.y + grid_size.height) % grid_size.height;
-            } else
-            {
-                target_ws = ws;
-            }
-        }
-
-        // Remember the direction we are moving now so that we can potentially
-        // move back. Only remember when we are actually changing the workspace
-        // and not just move a view around.
-        if (!window_only)
-        {
-            if (target_ws != ws)
-            {
-                this->last_dir = target_ws - ws;
-            }
-        }
-
-        return callback(target_ws - ws, view, window_only);
     }
 };
 }

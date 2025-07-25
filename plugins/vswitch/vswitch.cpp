@@ -1,5 +1,7 @@
+#include "wayfire/geometry.hpp"
 #include "wayfire/plugins/ipc/ipc-helpers.hpp"
 #include "wayfire/core.hpp"
+#include <utility>
 #include <wayfire/plugins/vswitch.hpp>
 #include <wayfire/per-output-plugin.hpp>
 #include <linux/input.h>
@@ -23,39 +25,6 @@ class workspace_animation_t : public duration_t
     timed_transition_t dx{*this};
     timed_transition_t dy{*this};
 };
-
-/**
- * A small helper function to move a view and its children to workspace @to_ws.
- * @relative flag tells us if @to_ws is relative to current workspace or not.
- */
-static void move_view(wayfire_toplevel_view view, wf::point_t to_ws, bool relative = false)
-{
-    // Get the wset.
-    auto wset = view->get_wset();
-
-    // Coordinates for moving the view.
-    // We need from, because @to_ws can be relative
-    wf::point_t from, to;
-    from = wset->get_view_main_workspace(view);
-    to   = (relative ? from : wf::point_t{0, 0}) + to_ws;
-
-    // Move all the views of this view's tree, including unmapped ones.
-    for (auto& v : view->enumerate_views(false))
-    {
-        wset->move_to_workspace(v, to);
-    }
-
-    if (auto output = view->get_output())
-    {
-        wf::view_change_workspace_signal signal;
-        signal.view = view;
-        signal.from = from;
-        signal.to   = to;
-        output->emit(&signal);
-    }
-
-    wf::get_core().seat->refocus();
-}
 
 /**
  * A simple scenegraph node which draws a view at a fixed position and as an overlay over the workspace wall.
@@ -351,7 +320,7 @@ class workspace_switch_t
 }
 }
 
-class vswitch : public wf::per_output_plugin_instance_t
+class vswitch : public wf::per_output_plugin_instance_t, public wf::vswitch::vswitch_handler_t
 {
   private:
 
@@ -378,7 +347,7 @@ class vswitch : public wf::per_output_plugin_instance_t
         std::function<void()> on_done;
     };
 
-    std::unique_ptr<vswitch_basic_plugin> algorithm;
+    std::shared_ptr<vswitch_basic_plugin> algorithm;
     std::unique_ptr<wf::vswitch::control_bindings_t> bindings;
 
     // Capabilities which are always required for vswitch, for now wall needs
@@ -396,44 +365,110 @@ class vswitch : public wf::per_output_plugin_instance_t
         output->connect(&on_set_workspace_request);
         output->connect(&on_grabbed_view_disappear);
 
-        algorithm = std::make_unique<vswitch_basic_plugin>(output,
+        algorithm = std::make_shared<vswitch_basic_plugin>(output,
             [=] () { output->deactivate_plugin(&grab_interface); });
 
         bindings = std::make_unique<wf::vswitch::control_bindings_t>(output);
-        bindings->setup([this] (wf::point_t delta, wayfire_toplevel_view view, bool only_view)
+        bindings->setup(this);
+    }
+
+    wf::point_t last_dir = {0, 0};
+    wf::point_t last_ws = {.x=0, .y=0};
+
+    virtual wf::point_t get_last_dir(wf::point_t current)
+    {
+        return this->last_ws - current;
+    }
+
+    /**
+     * Handle binding in the given direction. The next workspace will be
+     * determined by the current workspace, target direction and wraparound
+     * mode.
+     */
+    bool handle_dir(wf::point_t delta, wayfire_toplevel_view view, bool window_only, bool wraparound) override
+    {
+        if (!view && window_only)
         {
-            // Do not switch workspace with sticky view, they are on all
-            // workspaces anyway
-            if (view && view->sticky)
+            // Maybe there is no view, in any case, no need to do anything
+            return false;
+        }
+
+        auto ws = output->wset()->get_current_workspace();
+        auto target_ws = ws + delta;
+        if (!output->wset()->is_workspace_valid(target_ws))
+        {
+            if (wraparound)
             {
-                view = nullptr;
-            }
-
-            if (this->set_capabilities(wf::CAPABILITY_MANAGE_DESKTOP))
-            {
-                if (delta == wf::point_t{0, 0})
-                {
-                    // Consume input event
-                    return true;
-                }
-
-                if (only_view && view)
-                {
-                    if (!view->get_wset())
-                    {
-                        return false;
-                    }
-
-                    wf::vswitch::move_view(view, delta, true);
-                    return true;
-                }
-
-                return add_direction(delta, view);
+                auto grid_size = output->wset()->get_workspace_grid_size();
+                target_ws.x = (target_ws.x + grid_size.width) % grid_size.width;
+                target_ws.y = (target_ws.y + grid_size.height) % grid_size.height;
             } else
             {
-                return false;
+                target_ws = ws;
             }
-        });
+        }
+
+        // Remember the direction we are moving now so that we can potentially
+        // move back. Only remember when we are actually changing the workspace
+        // and not just move a view around.
+        if (!window_only)
+        {
+            if (target_ws != ws)
+            {
+                // this->last_dir = target_ws - ws;
+                this->last_ws = ws;
+            }
+        }
+
+        return handle_transition(target_ws - ws, view, window_only);
+    }
+
+    bool handle_last(wayfire_toplevel_view view, bool window_only) override {
+        return handle_dir(get_last_dir(output->wset()->get_current_workspace()), view, window_only, false);
+    }
+
+    bool handle_transition(wf::point_t delta, wayfire_toplevel_view view, bool only_view)
+    {
+        // Do not switch workspace with sticky view, they are on all
+        // workspaces anyway
+        if (view && view->sticky)
+        {
+            view = nullptr;
+        }
+
+        if (this->set_capabilities(wf::CAPABILITY_MANAGE_DESKTOP))
+        {
+            if (delta == wf::point_t{0, 0})
+            {
+                // Consume input event
+                return true;
+            }
+
+            if (only_view && view)
+            {
+                auto size = output->get_screen_size();
+
+                for (auto& v : view->enumerate_views(false))
+                {
+                    auto origin = wf::origin(v->get_pending_geometry());
+                    v->move(origin.x + delta.x * size.width, origin.y + delta.y * size.height);
+                }
+
+                wf::view_change_workspace_signal data;
+                data.view = view;
+                data.from = output->wset()->get_current_workspace();
+                data.to   = data.from + delta;
+                output->emit(&data);
+                wf::get_core().seat->refocus();
+
+                return true;
+            }
+
+            return add_direction(delta, view);
+        } else
+        {
+            return false;
+        }
     }
 
     inline bool is_active()
@@ -523,6 +558,7 @@ class vswitch : public wf::per_output_plugin_instance_t
             return;
         }
 
+        this->last_ws = ev->old_viewport;
         if (is_active())
         {
             ev->carried_out = add_direction(ev->new_viewport - ev->old_viewport);
@@ -574,14 +610,12 @@ class wf_vswitch_global_plugin_t : public wf::per_output_plugin_t<vswitch>
     {
         per_output_plugin_t::init();
         ipc_repo->register_method("vswitch/set-workspace", request_workspace);
-        ipc_repo->register_method("vswitch/send-view", send_view);
     }
 
     void fini() override
     {
         per_output_plugin_t::fini();
         ipc_repo->unregister_method("vswitch/set-workspace");
-        ipc_repo->unregister_method("vswitch/send-view");
     }
 
     wf::ipc::method_callback request_workspace = [=] (const wf::json_t& data)
@@ -633,38 +667,6 @@ class wf_vswitch_global_plugin_t : public wf::per_output_plugin_t<vswitch>
             output_instance[wo]->add_direction(delta, switch_with_view);
         }
 
-        return wf::ipc::json_ok();
-    };
-
-    wf::ipc::method_callback send_view = [=] (const wf::json_t& data)
-    {
-        uint64_t x = wf::ipc::json_get_uint64(data, "x");
-        uint64_t y = wf::ipc::json_get_uint64(data, "y");
-        uint64_t view_id = wf::ipc::json_get_uint64(data, "view-id");
-
-        auto view = wf::toplevel_cast(wf::ipc::find_view_by_id(view_id));
-        if (!view)
-        {
-            return wf::ipc::json_error("Invalid view or view not toplevel!");
-        }
-
-        if (!view->is_mapped())
-        {
-            return wf::ipc::json_error("Cannot grab unmapped view!");
-        }
-
-        if (!view->get_wset())
-        {
-            return wf::ipc::json_error("The given view does not belong to any wset!");
-        }
-
-        auto grid_size = view->get_wset()->get_workspace_grid_size();
-        if ((int(data["x"]) >= grid_size.width) || (int(data["y"]) >= grid_size.height))
-        {
-            return wf::ipc::json_error("Workspace coordinates are too big!");
-        }
-
-        wf::vswitch::move_view(view, {(int)x, (int)y});
         return wf::ipc::json_ok();
     };
 };

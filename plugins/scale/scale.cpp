@@ -94,7 +94,8 @@ struct view_scale_data
 class wayfire_scale : public wf::per_output_plugin_instance_t,
     public wf::keyboard_interaction_t,
     public wf::pointer_interaction_t,
-    public wf::touch_interaction_t
+    public wf::touch_interaction_t,
+    public wf::vswitch::vswitch_handler_t
 {
     /* helper class for optionally showing title overlays */
     scale_show_title_t show_title;
@@ -161,38 +162,43 @@ class wayfire_scale : public wf::per_output_plugin_instance_t,
     void setup_workspace_switching()
     {
         workspace_bindings = std::make_unique<wf::vswitch::control_bindings_t>(output);
-        workspace_bindings->setup([&] (wf::point_t delta, wayfire_toplevel_view view, bool only_view)
+        workspace_bindings->setup(this);
+    }
+
+    bool handle_dir(wf::point_t delta, wayfire_toplevel_view view, bool window_only, bool wraparound) override {
+        if (!output->is_plugin_active(grab_interface.name))
         {
-            if (!output->is_plugin_active(grab_interface.name))
-            {
-                return false;
-            }
+            return false;
+        }
 
-            if (delta == wf::point_t{0, 0})
-            {
-                // Consume input event
-                return true;
-            }
-
-            if (only_view)
-            {
-                // For now, scale does not let you move views between workspaces
-                return false;
-            }
-
-            auto ws = output->wset()->get_current_workspace() + delta;
-
-            // vswitch picks the top view, we want the focused one
-            std::vector<wayfire_toplevel_view> fixed_views;
-            if (view && current_focus_view && !all_workspaces)
-            {
-                fixed_views.push_back(current_focus_view);
-            }
-
-            output->wset()->request_workspace(ws, fixed_views);
-
+        if (delta == wf::point_t{0, 0})
+        {
+            // Consume input event
             return true;
-        });
+        }
+
+        if (window_only)
+        {
+            // For now, scale does not let you move views between workspaces
+            return false;
+        }
+
+        auto ws = output->wset()->get_current_workspace() + delta;
+
+        // vswitch picks the top view, we want the focused one
+        std::vector<wayfire_toplevel_view> fixed_views;
+        if (view && current_focus_view && !all_workspaces)
+        {
+            fixed_views.push_back(current_focus_view);
+        }
+
+        output->wset()->request_workspace(ws, fixed_views);
+
+        return true;
+    }
+
+    bool handle_last(wayfire_toplevel_view view, bool window_only) override {
+        return true;
     }
 
     /* Add a transformer that will be used to scale the view */
