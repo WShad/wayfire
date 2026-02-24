@@ -75,10 +75,8 @@ class per_output_vswitch_handler_t: public wf::per_output_plugin_instance_t {
         return handle_dir(get_last_dir(output->wset()->get_current_workspace()), view, window_only, false);
     };
 
+    // Override in actual plugin to do 'things' on workspace change transition  
     virtual bool handle_transition(wf::point_t delta, wayfire_toplevel_view view, bool only_view) = 0;
-
-//   private:
-    // wf::point_t last_dir = {0, 0};
 };
 
 /**
