@@ -400,7 +400,7 @@ class vswitch : public wf::vswitch::per_output_vswitch_handler_t
             [=] () { output->deactivate_plugin(&grab_interface); });
 
         bindings = std::make_unique<wf::vswitch::control_bindings_t>(output);
-        bindings->setup(this);//[this] (wf::point_t delta, wayfire_toplevel_view view, bool only_view)
+        bindings->setup(this);
     }
 
     bool handle_transition(wf::point_t delta, wayfire_toplevel_view view, bool only_view) override

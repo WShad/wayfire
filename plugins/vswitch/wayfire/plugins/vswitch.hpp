@@ -24,12 +24,13 @@ namespace wf
 {
 namespace vswitch
 {
-
-class per_output_vswitch_handler_t: public wf::per_output_plugin_instance_t {
+class per_output_vswitch_handler_t : public wf::per_output_plugin_instance_t
+{
   public:
-    wf::point_t last_ws = {.x=0, .y=0};
+    wf::point_t last_ws = {.x = 0, .y = 0};
 
-    bool handle_dir(wf::point_t delta, wayfire_toplevel_view view, bool window_only, bool wraparound) {
+    bool handle_dir(wf::point_t delta, wayfire_toplevel_view view, bool window_only, bool wraparound)
+    {
         if (!view && window_only)
         {
             // Maybe there is no view, in any case, no need to do anything
@@ -64,18 +65,19 @@ class per_output_vswitch_handler_t: public wf::per_output_plugin_instance_t {
         }
 
         return handle_transition(target_ws - ws, view, window_only);
-    };
-    
+    }
+
     wf::point_t get_last_dir(wf::point_t current)
     {
         return this->last_ws - current;
     }
 
-    bool handle_last(wayfire_toplevel_view view, bool window_only) {
+    bool handle_last(wayfire_toplevel_view view, bool window_only)
+    {
         return handle_dir(get_last_dir(output->wset()->get_current_workspace()), view, window_only, false);
-    };
+    }
 
-    // Override in actual plugin to do 'things' on workspace change transition  
+    // Override in actual plugin to do 'things' on workspace change transition
     virtual bool handle_transition(wf::point_t delta, wayfire_toplevel_view view, bool only_view) = 0;
 };
 
@@ -114,8 +116,8 @@ class control_bindings_t
      *
      * @param delta The difference between current and target workspace.
      * @param view The view to be moved together with the switch, or nullptr.
-     * @param window_only Move only the view to the given workspace. It is
-     *   guaranteed that @view will not be nullptr if this is true.
+     * @param window_only Move only the view to the given workspace. It is guaranteed that @view will not be
+     * nullptr if this is true.
      */
     using binding_callback_t = std::function<bool (
         wf::point_t delta, wayfire_toplevel_view view, bool window_only)>;
@@ -296,9 +298,8 @@ class control_bindings_t
     }
 
     /**
-     * Handle binding in the given direction. The next workspace will be
-     * determined by the current workspace, target direction and wraparound
-     * mode.
+     * Handle binding in the given direction. The next workspace will be determined by the current workspace,
+     * target direction and wraparound mode.
      */
     virtual bool handle_dir(wf::point_t dir, wayfire_toplevel_view view, bool window_only,
         binding_callback_t callback)
